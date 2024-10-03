@@ -1,24 +1,25 @@
 
-# Pub/Sub com Node.js, TypeScript e Redis
+# Sistema Distribuído com Pub/Sub usando Redis, Node.js, TypeScript e Express
 
-Este projeto demonstra a implementação de um sistema de **Pub/Sub** (Publicação/Assinatura) usando **Node.js**, **TypeScript** e **Redis**. O Redis atua como o intermediário entre o **publicador** (publisher) e o **assinante** (subscriber), permitindo a troca de mensagens de forma assíncrona.
+Este projeto implementa um sistema distribuído utilizando o padrão **Pub/Sub** (Publicação/Assinatura) com **Redis** para comunicação entre diferentes serviços. 
+A aplicação usa **Node.js**, **TypeScript** e **Express** para criar uma API que envia ordens (mensagens), e diferentes **subscribers** executam comandos baseados nessas ordens.
 
 ## 📋 Pré-requisitos
 
-Certifique-se de ter o seguinte instalado em sua máquina:
+Certifique-se de ter o seguinte instalado:
 
 - **Node.js** (versão 14 ou superior)
 - **npm** ou **yarn** (para gerenciar pacotes)
-- **Redis** (rodando localmente ou em contêiner Docker)
+- **Redis** (rodando localmente ou via Docker)
 
 ## 🚀 Como rodar o projeto
 
 ### 1. Clonar o repositório
 
-Primeiro, clone o repositório para a sua máquina:
+Clone o repositório e navegue até a pasta do projeto:
 
 ```bash
-git clone https://github.com/seu-usuario/seu-repositorio.git
+git clone https://github.com/seu-usuario/mensageria-com-redis-http.git
 cd seu-repositorio
 ```
 
@@ -34,105 +35,162 @@ yarn install
 
 ### 3. Configurar o Redis
 
-Certifique-se de que o Redis esteja rodando localmente. Se você não tem o Redis instalado, siga as instruções abaixo:
-
-#### a) Rodar Redis localmente via Docker:
+Certifique-se de que o Redis esteja rodando localmente. Se necessário, você pode rodar o Redis via Docker:
 
 ```bash
 docker run --name redis -d -p 6379:6379 redis
 ```
 
-#### b) Ou instalar o Redis diretamente no sistema:
-- **Ubuntu/Debian**:
-  ```bash
-  sudo apt update
-  sudo apt install redis-server
-  sudo systemctl start redis-server
-  ```
-- **MacOS (Homebrew)**:
-  ```bash
-  brew install redis
-  brew services start redis
-  ```
+### 4. Executar o Publisher (Servidor Express)
 
-### 4. Executar o Assinante (Subscriber)
-
-O assinante fica escutando o canal Redis e recebe as mensagens publicadas.
+O Publisher é o serviço responsável por enviar ordens via API Express.
 
 ```bash
-npx ts-node subscriber.ts
+npx ts-node src/publisher.ts
 ```
 
-### 5. Executar o Publicador (Publisher)
+### 5. Executar os Subscribers
 
-O publicador envia uma mensagem para o canal Redis.
+Os Subscribers escutam as ordens publicadas e executam ações baseadas nelas. Execute cada subscriber em um terminal separado:
 
 ```bash
-npx ts-node publisher.ts
+npx ts-node src/subscriber1.ts
+npx ts-node src/subscriber2.ts
 ```
 
-### 6. Testando
+### 6. Testar via API
 
-- Quando o **subscriber** estiver rodando, ele ficará esperando por novas mensagens.
-- Execute o **publisher** para enviar uma mensagem ao canal `notifications`.
-- O **subscriber** deve receber e exibir a mensagem no console.
+Envie ordens para o sistema usando `curl` ou ferramentas como Postman. 
+
+**Exemplo 1**: Enviar o comando `sayHello`:
+
+```bash
+curl -X POST http://localhost:3000/send-order -H "Content-Type: application/json" -d '{"command": "sayHello"}'
+```
+
+- O **Subscriber 1** responde com "Olá, Mundo!".
+
+**Exemplo 2**: Enviar o comando `calculate`:
+
+```bash
+curl -X POST http://localhost:3000/send-order -H "Content-Type: application/json" -d '{"command": "calculate"}'
+```
+
+- O **Subscriber 2** responde com "Resultado do cálculo é 4".
 
 ## 📚 Explicação do sistema Pub/Sub
 
-- **Pub/Sub** (Publicação/Assinatura) é um padrão de mensageria onde:
-  - Um **publicador** envia mensagens para um **canal**.
-  - Um ou mais **assinantes** escutam esse canal e processam as mensagens que são publicadas.
-  
-### 📤 Publicador (Publisher)
+- O **Publisher** envia ordens através de um endpoint HTTP, publicando mensagens no canal Redis chamado `orders`.
+- Os **Subscribers** ficam escutando esse canal e reagem às mensagens recebidas, executando ações específicas baseadas no tipo de comando.
 
-No arquivo `publisher.ts`, temos o código responsável por publicar uma mensagem no canal Redis `notifications`:
+### Arquitetura
+
+- **Publisher (Express API)**: Responsável por enviar ordens (mensagens) via HTTP e publicar no canal Redis.
+- **Subscribers**: Escutam o canal `orders` e executam comandos diferentes com base no conteúdo da mensagem.
+
+### 📤 Exemplo de código do Publisher
 
 ```typescript
+import express from 'express';
 import { createClient } from 'redis';
 
-async function publishMessage() {
-  const redisClient = createClient();
-  await redisClient.connect();
+const app = express();
+app.use(express.json());
 
-  const message = { title: 'Nova Notificação!', body: 'Você tem uma nova mensagem.', timestamp: new Date() };
+const redisClient = createClient();
+redisClient.connect().catch(console.error);
 
-  await redisClient.publish('notifications', JSON.stringify(message));
-  console.log('Mensagem publicada:', message);
+app.post('/send-order', async (req, res) => {
+  const { command } = req.body;
 
-  await redisClient.disconnect();
-}
+  if (!command) {
+    return res.status(400).send({ error: 'Comando não especificado.' });
+  }
 
-publishMessage().catch(console.error);
+  await redisClient.publish('orders', JSON.stringify({ command }));
+  console.log(`Ordem enviada: ${command}`);
+  res.send({ message: 'Ordem enviada com sucesso.' });
+});
+
+const PORT = 3000;
+app.listen(PORT, () => {
+  console.log(`Publisher rodando na porta ${PORT}`);
+});
 ```
 
-### 📥 Assinante (Subscriber)
+### 📥 Exemplo de código dos Subscribers
 
-No arquivo `subscriber.ts`, temos o código que assina o canal `notifications` e recebe as mensagens publicadas:
+#### Subscriber 1 (Ações simples):
 
 ```typescript
 import { createClient } from 'redis';
 
-async function subscribeToMessages() {
+async function startSubscriber() {
   const redisClient = createClient();
   await redisClient.connect();
 
-  await redisClient.subscribe('notifications', (message) => {
-    console.log('Mensagem recebida:', JSON.parse(message));
+  await redisClient.subscribe('orders', (message) => {
+    const { command } = JSON.parse(message);
+
+    if (command === 'sayHello') {
+      console.log('Subscriber 1: Olá, Mundo!');
+    } else if (command === 'showDate') {
+      console.log('Subscriber 1: A data atual é', new Date().toLocaleString());
+    } else {
+      console.log(`Subscriber 1: Comando desconhecido: ${command}`);
+    }
   });
 
-  console.log('Assinado ao canal: notifications');
+  console.log('Subscriber 1 escutando o canal "orders"...');
 }
 
-subscribeToMessages().catch(console.error);
+startSubscriber().catch(console.error);
 ```
 
-### 🎯 Funcionalidade
+#### Subscriber 2 (Cálculos):
 
-- O **publicador** publica uma mensagem no canal `notifications`.
-- O **assinante** assina o canal `notifications` e imprime as mensagens recebidas no console.
+```typescript
+import { createClient } from 'redis';
+
+async function startSubscriber() {
+  const redisClient = createClient();
+  await redisClient.connect();
+
+  await redisClient.subscribe('orders', (message) => {
+    const { command } = JSON.parse(message);
+
+    if (command === 'sayGoodbye') {
+      console.log('Subscriber 2: Tchau, até mais!');
+    } else if (command === 'calculate') {
+      const result = 2 + 2;
+      console.log('Subscriber 2: Resultado do cálculo é', result);
+    } else {
+      console.log(`Subscriber 2: Comando desconhecido: ${command}`);
+    }
+  });
+
+  console.log('Subscriber 2 escutando o canal "orders"...');
+}
+
+startSubscriber().catch(console.error);
+```
 
 ## 🛠️ Tecnologias Utilizadas
 
 - **Node.js**: Ambiente de execução JavaScript no lado do servidor.
 - **TypeScript**: Superset de JavaScript com tipagem estática.
-- **Redis**: Banco de dados em memória utilizado para mensageria e cache.
+- **Redis**: Sistema de armazenamento de dados em memória utilizado para mensageria.
+
+## 💼 Caso de Uso Real
+
+Este tipo de sistema distribuído é amplamente utilizado em **arquiteturas de microserviços**, onde diferentes serviços (subsistemas) precisam reagir de forma assíncrona a eventos. Um exemplo de uso seria:
+
+### Exemplo: Processamento de Pedidos em um Sistema de E-commerce
+
+Imagine um sistema de e-commerce que envia ordens para diferentes serviços quando um novo pedido é criado. O serviço **Publisher** (neste caso, o serviço de pedidos) envia uma mensagem que pode conter diferentes tipos de comandos, como:
+
+- Enviar um e-mail de confirmação para o cliente.
+- Atualizar o inventário do produto.
+- Criar uma fatura no sistema de contabilidade.
+
+Cada um desses serviços seria representado por **subscribers** distintos que, ao receber uma ordem, executam uma tarefa diferente de forma assíncrona, garantindo maior escalabilidade e desacoplamento entre os sistemas.
